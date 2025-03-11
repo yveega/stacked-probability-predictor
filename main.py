@@ -1,6 +1,9 @@
 import sys
+import os
 from PyQt5.QtCore    import *
 from PyQt5.QtWidgets import *
+from PyQt5.QtGui import QColor
+from pyqtgraph import PlotWidget, FillBetweenItem, LegendItem
 import numpy as np
 
 PARAMS = ["Ишемическая болезнь сердца",
@@ -25,7 +28,38 @@ PARAMS = ["Ишемическая болезнь сердца",
 "Аутоиммунные заболевания"]
 
 COEFFS = np.array([1, 1, 1, 1, 1, 0, 1, 0, -4, -3, -2, 0, 0, 0, 1, -2, 0, 1, 0, -1])
-print(len(COEFFS), len(PARAMS))
+if getattr(sys, 'frozen', False):
+    transition_probs_before5 = np.loadtxt(os.path.join(sys._MEIPASS, "data\\tran_probs_before_5d.txt"))
+    transition_probs_after5 = np.loadtxt(os.path.join(sys._MEIPASS, "data\\tran_probs_after_5d.txt"))
+else:
+    transition_probs_before5 = np.loadtxt("data\\tran_probs_before_5d.txt")
+    transition_probs_after5 = np.loadtxt("data\\tran_probs_after_5d.txt")
+
+STATES = ["Смерть", "ИВЛ", "НИВЛ", "БП", "Выписка"]
+
+
+class AreaPlotWidget(PlotWidget):
+    def __init__(self, parent=None, background='default', plotItem=None, **kargs):
+        super(AreaPlotWidget, self).__init__(parent, background, plotItem, **kargs)
+        self.plots = []
+        self.fills = []
+        self.legend = self.addLegend(brush=(50, 50, 50, 90), offset=50, labelTextColor=(0, 0, 0))
+
+    def areaPlot(self, x, y, names, brushes=None):
+        if brushes is None:
+            brushes = [(70, 70, 70, 100),
+                       (240, 10, 10, 100),
+                       (240, 200, 10, 100),
+                       (50, 50, 250, 100),
+                       (50, 250, 50, 100)]
+        y_shifted = np.zeros((len(x)), dtype=y.dtype)
+        self.plots.append(self.plot(x, y_shifted))
+        for i in range(y.shape[0]):
+            y_shifted = y_shifted + y[i]
+            self.plots.append(self.plot(x, y_shifted, pen=QColor(brushes[i][0], brushes[i][1], brushes[i][2])))
+            fill = FillBetweenItem(self.plots[i], self.plots[i + 1], brush=brushes[i])
+            self.addItem(fill)
+            self.legend.addItem(self.plots[i + 1], names[i])
 
 
 class CheckboxWindow(QWidget):
@@ -40,9 +74,9 @@ class CheckboxWindow(QWidget):
                 self.listCheckBox[i].setChecked(initial_params[i])
             grid.addWidget(self.listCheckBox[i], i, 0)
 
-        self.button = QPushButton("Check CheckBox")
+        self.button = QPushButton("Расчёт")
 
-        grid.addWidget(self.button,     len(PARAMS), 0, 1,2)
+        grid.addWidget(self.button, len(PARAMS), 0, 1,2)
         self.setLayout(grid)
 
 
@@ -50,17 +84,47 @@ class GraphWindow(QWidget):
     def __init__(self, patient_params, parent=None):
         super(GraphWindow, self).__init__(parent)
         self.comorbidity = np.sum(patient_params * COEFFS)
-        self.comorbidity_label = QLabel("Индекс коморбидности φ = " + str(self.comorbidity))
-        self.back_button = QPushButton("Back")
+        self.P_before5d = np.eye(len(STATES), dtype=float)
+        self.P_after5d = np.eye(len(STATES), dtype=float)
+        if self.comorbidity <= 0:
+            self.comorbidity_label = QLabel("Индекс коморбидности φ = " + str(self.comorbidity)
+                                            + ". Низкое значение")
+            self.P_before5d[:3] = transition_probs_before5[:3]
+            self.P_after5d[:3] = transition_probs_after5[:3]
+        elif self.comorbidity <= 3:
+            self.comorbidity_label = QLabel("Индекс коморбидности φ = " + str(self.comorbidity)
+                                            + ". Среднее значение")
+            self.P_before5d[:3] = transition_probs_before5[3:6]
+            self.P_after5d[:3] = transition_probs_after5[3:6]
+        else:
+            self.comorbidity_label = QLabel("Индекс коморбидности φ = " + str(self.comorbidity)
+                                            + ". Высокое значение")
+            self.P_before5d[:3] = transition_probs_before5[6:]
+            self.P_after5d[:3] = transition_probs_after5[6:]
+        self.back_button = QPushButton("Назад")
         self.layout = QGridLayout()
-        self.layout.addWidget(self.comorbidity_label, 0, 0)
-        self.layout.addWidget(self.back_button, 1, 0)
+        self.graph = AreaPlotWidget(background="white")
+        self.plotStackedProbability([0, 0, 1, 0, 0], 20)
+        self.layout.addWidget(self.comorbidity_label, 0, 0, 1, 3)
+        self.layout.addWidget(self.back_button, 0, 4)
+        self.layout.addWidget(self.graph, 1, 0)
         self.setLayout(self.layout)
+    
+    def plotStackedProbability(self, initial_state, duration):
+        values = np.zeros((len(STATES), duration + 1), dtype=float)
+        values[:, 0] = initial_state
+        for i in range(1, 6):
+            values[:, i] = np.dot(self.P_before5d.T, values[:, i - 1])
+        for i in range(6, duration + 1):
+            values[:, i] = np.dot(self.P_after5d.T, values[:, i - 1])
+        self.graph.areaPlot(np.arange(0, duration + 1), values, STATES)
+
 
 
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
+        self.setWindowTitle("Stacked Probability Predictor")
         self.setGeometry(50, 100, 1700, 800)
         self.setFixedSize(1700, 800)
         self.patient_params = np.zeros((len(PARAMS)), dtype=np.bool)
@@ -84,7 +148,6 @@ class MainWindow(QMainWindow):
     def read_params(self):
         for i, checkbox in enumerate(self.CheckboxW.listCheckBox):
             self.patient_params[i] = bool(checkbox.checkState())
-        print(self.patient_params)
 
 
 app = QApplication([])
