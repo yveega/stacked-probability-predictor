@@ -2,9 +2,10 @@ import sys
 import os
 from PyQt5.QtCore    import *
 from PyQt5.QtWidgets import *
-from PyQt5.QtGui import QColor
+from PyQt5.QtGui import QColor, QFont
 from pyqtgraph import PlotWidget, FillBetweenItem, LegendItem
 import numpy as np
+from bootstrap import bootstrap
 
 PARAMS = ["Ишемическая болезнь сердца",
 "Гипертония",
@@ -50,6 +51,8 @@ class AreaPlotWidget(PlotWidget):
         self.setInteractive(False)
         self.setLabel("left", "вероятность", color="black")
         self.setLabel("bottom", "время (дни)", color="black")
+        title = self.getPlotItem().titleLabel.text
+        self.setTitle(title, color="black")
         self.showGrid(x=True, y=True)
 
     def areaPlot(self, x, y, names, brushes=None):
@@ -78,17 +81,22 @@ class CheckboxWindow(QWidget):
     def __init__(self, parent=None, initial_params=None):
         super(CheckboxWindow, self).__init__(parent)
         self.listCheckBox = []
+        box_widget = QWidget()
+        box_layout = QVBoxLayout()
         grid = QGridLayout()
+        label = QLabel(text="Выберите хронические заболевания, наблюдающиеся у пациента")
 
         for i, v in enumerate(PARAMS):
             self.listCheckBox.append(QCheckBox(v))
             if initial_params is not None and initial_params[i]:
                 self.listCheckBox[i].setChecked(initial_params[i])
-            grid.addWidget(self.listCheckBox[i], i, 0)
+            box_layout.addWidget(self.listCheckBox[i])
 
         self.button = QPushButton("Расчёт")
-
-        grid.addWidget(self.button, len(PARAMS), 0, 1,2)
+        box_widget.setLayout(box_layout)
+        grid.addWidget(label, 0, 0)
+        grid.addWidget(box_widget, 1, 0)
+        grid.addWidget(self.button, 2, 0)
         self.setLayout(grid)
 
 
@@ -127,35 +135,57 @@ class GraphWindow(QWidget):
         self.no_IV_radio.setChecked(True)
         self.no_IV_radio.initial_state = [1.0, 0.0, 0.0, 0.0, 0.0]
         self.no_IV_radio.toggled.connect(self.onInitialStateChanged)
+        self.initial_state = self.no_IV_radio.initial_state
+        self.duration = 20
 
         self.label_state = QLabel(text="Начальное состояние пациента:")
         self.layout = QGridLayout()
-        self.graph = AreaPlotWidget(background="white")
-        self.plotStackedProbability([1, 0, 0, 0, 0], 20)
+        self.graph = AreaPlotWidget(background="white", title="Средний случай")
+        self.low_graph = AreaPlotWidget(background=(220, 255, 220), title="Наилучший случай (95%)")
+        self.high_graph = AreaPlotWidget(background=(255, 220, 220), title="Наихудший случай (95%)")
+        self.plotAll()
+
         self.layout.addWidget(self.comorbidity_label, 0, 0, 1, 3)
-        self.layout.addWidget(self.back_button, 0, 4)
+        self.layout.addWidget(self.back_button, 0, 5)
         self.layout.addWidget(self.label_state, 1, 0)
         self.layout.addWidget(self.IV_radio, 1, 1)
         self.layout.addWidget(self.NIV_radio, 1, 2)
         self.layout.addWidget(self.no_IV_radio, 1, 3)
-        self.layout.addWidget(self.graph, 2, 0, 1, 5)
+        self.layout.addWidget(self.graph, 2, 0, 1, 6)
+        self.layout.addWidget(self.low_graph, 3, 0, 1, 3)
+        self.layout.addWidget(self.high_graph, 3, 3, 1, 3)
         self.setLayout(self.layout)
     
-    def plotStackedProbability(self, initial_state, duration):
+    def plotStackedProbability(self, plotwidget, P_before5d, P_after5d, initial_state, duration):
         values = np.zeros((len(STATES), duration + 1), dtype=float)
         values[:, 0] = initial_state
         for i in range(1, 6):
-            values[:, i] = np.dot(self.P_before5d.T, values[:, i - 1])
+            values[:, i] = np.dot(P_before5d.T, values[:, i - 1])
         for i in range(6, duration + 1):
-            values[:, i] = np.dot(self.P_after5d.T, values[:, i - 1])
-        self.graph.areaPlot(np.arange(0, duration + 1), values, STATES)
+            values[:, i] = np.dot(P_after5d.T, values[:, i - 1])
+        plotwidget.getPlotItem().clear()
+        plotwidget.areaPlot(np.arange(0, duration + 1), values, STATES)
+
+    def plotAll(self):
+        self.plotStackedProbability(self.graph,
+                                    self.P_before5d, self.P_after5d,
+                                    self.initial_state,
+                                    self.duration)
+        P_low, P_high = bootstrap(self.comorbidity, self.initial_state, self.duration)
+        self.plotStackedProbability(self.low_graph,
+                                    P_low[0], P_low[1],
+                                    self.initial_state,
+                                    self.duration)
+        self.plotStackedProbability(self.high_graph,
+                                    P_high[0], P_high[1],
+                                    self.initial_state,
+                                    self.duration)
 
     def onInitialStateChanged(self):
         radio = self.sender()
         if radio.isChecked():
-            self.graph.getPlotItem().clear()
-            self.plotStackedProbability(radio.initial_state, 20)
-
+            self.initial_state = radio.initial_state
+            self.plotAll()
 
 
 class MainWindow(QMainWindow):
@@ -188,6 +218,9 @@ class MainWindow(QMainWindow):
 
 
 app = QApplication([])
+font = QFont()
+font.setWeight(25)
+app.setStyleSheet("QLabel{font-size: 14pt;}")
 main = MainWindow()
 main.show()
 app.exec()
