@@ -41,9 +41,16 @@ STATES = ["Смерть", "ИВЛ", "НИВЛ", "БП", "Выписка"]
 class AreaPlotWidget(PlotWidget):
     def __init__(self, parent=None, background='default', plotItem=None, **kargs):
         super(AreaPlotWidget, self).__init__(parent, background, plotItem, **kargs)
+        self.oreder_plots = [4, 2, 1, 0, 3]
         self.plots = []
         self.fills = []
-        self.legend = self.addLegend(brush=(50, 50, 50, 90), offset=50, labelTextColor=(0, 0, 0))
+        self.legend = self.addLegend(brush=(50, 50, 50, 90),
+                                     offset=(-50, 50),
+                                     labelTextColor=(0, 0, 0))
+        self.setInteractive(False)
+        self.setLabel("left", "вероятность", color="black")
+        self.setLabel("bottom", "время (дни)", color="black")
+        self.showGrid(x=True, y=True)
 
     def areaPlot(self, x, y, names, brushes=None):
         if brushes is None:
@@ -53,13 +60,18 @@ class AreaPlotWidget(PlotWidget):
                        (50, 50, 250, 100),
                        (50, 250, 50, 100)]
         y_shifted = np.zeros((len(x)), dtype=y.dtype)
+        self.plots = []
+        self.fills = []
         self.plots.append(self.plot(x, y_shifted))
         for i in range(y.shape[0]):
-            y_shifted = y_shifted + y[i]
-            self.plots.append(self.plot(x, y_shifted, pen=QColor(brushes[i][0], brushes[i][1], brushes[i][2])))
-            fill = FillBetweenItem(self.plots[i], self.plots[i + 1], brush=brushes[i])
-            self.addItem(fill)
+            y_shifted = y_shifted + y[self.oreder_plots[i]]
+            self.plots.append(self.plot(x, y_shifted, pen=QColor(*brushes[i])))
+            self.fills.append(FillBetweenItem(self.plots[i], self.plots[i + 1], brush=brushes[i]))
+            self.addItem(self.fills[-1])
             self.legend.addItem(self.plots[i + 1], names[i])
+        self.getPlotItem().setContentsMargins(15, 15, 15, 15)
+        self.setXRange(0, len(x) - 1, padding=0)
+        self.setYRange(0, 1, padding=0)
 
 
 class CheckboxWindow(QWidget):
@@ -102,12 +114,31 @@ class GraphWindow(QWidget):
             self.P_before5d[:3] = transition_probs_before5[6:]
             self.P_after5d[:3] = transition_probs_after5[6:]
         self.back_button = QPushButton("Назад")
+
+        self.IV_radio = QRadioButton(text="ИВЛ")
+        self.IV_radio.initial_state = [0.0, 0.0, 1.0, 0.0, 0.0]
+        self.IV_radio.toggled.connect(self.onInitialStateChanged)
+
+        self.NIV_radio = QRadioButton(text="НИВЛ")
+        self.NIV_radio.initial_state = [0.0, 1.0, 0.0, 0.0, 0.0]
+        self.NIV_radio.toggled.connect(self.onInitialStateChanged)
+
+        self.no_IV_radio = QRadioButton(text="без вентиляции")
+        self.no_IV_radio.setChecked(True)
+        self.no_IV_radio.initial_state = [1.0, 0.0, 0.0, 0.0, 0.0]
+        self.no_IV_radio.toggled.connect(self.onInitialStateChanged)
+
+        self.label_state = QLabel(text="Начальное состояние пациента:")
         self.layout = QGridLayout()
         self.graph = AreaPlotWidget(background="white")
-        self.plotStackedProbability([0, 0, 1, 0, 0], 20)
+        self.plotStackedProbability([1, 0, 0, 0, 0], 20)
         self.layout.addWidget(self.comorbidity_label, 0, 0, 1, 3)
         self.layout.addWidget(self.back_button, 0, 4)
-        self.layout.addWidget(self.graph, 1, 0)
+        self.layout.addWidget(self.label_state, 1, 0)
+        self.layout.addWidget(self.IV_radio, 1, 1)
+        self.layout.addWidget(self.NIV_radio, 1, 2)
+        self.layout.addWidget(self.no_IV_radio, 1, 3)
+        self.layout.addWidget(self.graph, 2, 0, 1, 5)
         self.setLayout(self.layout)
     
     def plotStackedProbability(self, initial_state, duration):
@@ -119,14 +150,20 @@ class GraphWindow(QWidget):
             values[:, i] = np.dot(self.P_after5d.T, values[:, i - 1])
         self.graph.areaPlot(np.arange(0, duration + 1), values, STATES)
 
+    def onInitialStateChanged(self):
+        radio = self.sender()
+        if radio.isChecked():
+            self.graph.getPlotItem().clear()
+            self.plotStackedProbability(radio.initial_state, 20)
+
 
 
 class MainWindow(QMainWindow):
     def __init__(self, parent=None):
         super(MainWindow, self).__init__(parent)
         self.setWindowTitle("Stacked Probability Predictor")
-        self.setGeometry(50, 100, 1700, 800)
-        self.setFixedSize(1700, 800)
+        self.setGeometry(50, 100, 1700, 900)
+        self.setFixedSize(1700, 900)
         self.patient_params = np.zeros((len(PARAMS)), dtype=np.bool)
         self.startCheckboxWindow()
     
